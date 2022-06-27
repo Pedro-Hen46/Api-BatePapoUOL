@@ -22,7 +22,7 @@ Client.connect().then(() => {
 
 const participantsSchema = joi.object({name: joi.string().required() });
 
-const userSchema = joi.object({ user: joi.string().required() });
+const userSchema = joi.object({ user: joi.string().required() }).unknown();
 
 const messageDataSchema = joi.object({
   to: joi.string().required(),
@@ -111,26 +111,31 @@ server.post("/messages", async (req, res) => {
 });
 
 server.get("/messages", async (req, res) => {
-  const limitMessagesSchema = joi.object({ limit: joi.number().integer().required() });
+  const limitMessagesSchema = joi
+  .object({ limit: joi.number().integer().required() })
+  .allow({});
 
-  const validationUserHeader = userSchema.validate(req.headers)
+  const testUserHeader = { user: req.headers.user};
+
+  const validationUserHeader = userSchema.validate(testUserHeader)
   const validationLimit = limitMessagesSchema.validate(req.query)
-
-  // if(validationUserHeader.error) {
-  //   const { error } = validationUserHeader;
-  //   const errorHeader = error.details.map((item) => item.message);
-    
-  //   return res.status(422).send("Erro: usuario não encontrado na lista de participantes ativos");
-  // };
-  // if (validationLimit.error) {
-  //   const { error } = validationLimit;
-  //   const limit_error = error.details.map((item) => item.message);
-    
-  //   return res.status(422).send(limit_error);
-  // }
-  
   const userHeader = req.headers.user;
   const limitQuery = Number(req.query.limit);
+
+  if(validationUserHeader.error) {
+    const { error } = validationUserHeader;
+    const errorHeader = error.details.map((item) => item.message);
+    
+    return res.status(422).send(errorHeader);
+  };
+
+  if (validationLimit.error) {
+    const { error } = validationLimit;
+    const limit_error = error.details.map((item) => item.message);
+    
+    return res.status(422).send(limit_error);
+  }
+  
   const messagesFilter = {
     $or: [
       { $and: [{ type: 'private_message' }, { to: userHeader }] }, // Se a mensagem for privada
@@ -138,10 +143,45 @@ server.get("/messages", async (req, res) => {
       { from: userHeader } // Qualquer mensagem Publica.
     ]
   }
-
-  const messageFromMongo = await db.collection('messages').find(messagesFilter).toArray();
+  const messageToMongo = await db.collection('messages').find(messagesFilter).toArray();
   
-  res.status(200).send(messagesWithLimit(limitQuery, messageFromMongo));
+  res.status(200).send(messagesWithLimit(limitQuery, messageToMongo));
+});
+
+server.post("/status", async function(req, res) {
+  let userHeader;
+
+  try {
+    userHeader = req.headers.user;
+  } catch (err) {
+    return res.status(406).send(err)
+  };
+
+  const fromSchema = joi.array().has(joi.object({ name: userHeader }).unknown())
+
+  const participants = await db.collection('participants').find().toArray()
+
+  const validationHeaders = fromSchema.validate(participants)
+
+  if (validationHeaders.error) {
+    return res.sendStatus(404)
+  }
+
+  const lastStatus = Date.now()
+
+  await db
+    .collection('participants')
+    .updateOne({ name: userHeader }, { $set: { lastStatus } })
+
+  res.sendStatus(200)
+
+
+});
+
+
+
+server.listen(SERVER_PORT, () => {
+  console.log(chalk.red.bold(`Servidor iniciado na porta: ${SERVER_PORT}`));
 });
 
 function messagesWithLimit(limit, arr){
@@ -150,7 +190,27 @@ function messagesWithLimit(limit, arr){
   return arr.slice(-limit);
 };
 
+setInterval(async () => {
+  const now = Date.now()
+  const tenSegondsAgo = now - 1000 * 10
+  const filter = { lastStatus: { $lt: tenSegondsAgo } }
 
-server.listen(SERVER_PORT, () => {
-  console.log(chalk.red.bold(`Servidor iniciado na porta: ${SERVER_PORT}`));
-});
+  const participants = await db
+    .collection('participants')
+    .find(filter)
+    .toArray()
+
+  for (const { _id, name } of participants) {
+    const message = {
+      from: name,
+      to: 'Todos',
+      text: 'sai da sala...',
+      type: 'status',
+      time: dayjs(now).format('HH:mm:ss')
+    }
+
+    await db.collection('messages').insertOne(message)
+
+    await db.collection('participants').deleteOne({ _id })
+  }
+}, 15000)
