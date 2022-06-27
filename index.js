@@ -20,9 +20,9 @@ Client.connect().then(() => {
   db = Client.db("api_uol_batepapo");
 });
 
-const participantsSchema = joi.object({
-  name: joi.string().required(),
-});
+const participantsSchema = joi.object({name: joi.string().required() });
+
+const userSchema = joi.object({ user: joi.string().required() });
 
 const messageDataSchema = joi.object({
   to: joi.string().required(),
@@ -94,7 +94,7 @@ server.post("/messages", async (req, res) => {
     const { error } = validateUserFrom;
     const errorHeader = error.details.map((item) => item.message);
     
-    return res.status(422).send("Erro: usuario não encontrado na lista de participantes");
+    return res.status(422).send("Erro: usuario não encontrado na lista de participantes ativos");
 }
 
     const message = {
@@ -107,8 +107,49 @@ server.post("/messages", async (req, res) => {
 
     await db.collection('messages').insertOne(message); //Inserindo mensagem no banco de dados;
 
-  res.status(201).send("Mensagem enviado com sucesso");
+  res.status(201).send("Mensagem enviada com sucesso");
 });
+
+server.get("/messages", async (req, res) => {
+  const limitMessagesSchema = joi.object({ limit: joi.number().integer().required() });
+
+  const validationUserHeader = userSchema.validate(req.headers)
+  const validationLimit = limitMessagesSchema.validate(req.query)
+
+  // if(validationUserHeader.error) {
+  //   const { error } = validationUserHeader;
+  //   const errorHeader = error.details.map((item) => item.message);
+    
+  //   return res.status(422).send("Erro: usuario não encontrado na lista de participantes ativos");
+  // };
+  // if (validationLimit.error) {
+  //   const { error } = validationLimit;
+  //   const limit_error = error.details.map((item) => item.message);
+    
+  //   return res.status(422).send(limit_error);
+  // }
+  
+  const userHeader = req.headers.user;
+  const limitQuery = Number(req.query.limit);
+  const messagesFilter = {
+    $or: [
+      { $and: [{ type: 'private_message' }, { to: userHeader }] }, // Se a mensagem for privada
+      { $or: [{ to: 'Todos' }, { to: userHeader }] }, // Todos que conter o user enviadas direto para o user.
+      { from: userHeader } // Qualquer mensagem Publica.
+    ]
+  }
+
+  const messageFromMongo = await db.collection('messages').find(messagesFilter).toArray();
+  
+  res.status(200).send(messagesWithLimit(limitQuery, messageFromMongo));
+});
+
+function messagesWithLimit(limit, arr){
+  if (limit === undefined) return arr;
+
+  return arr.slice(-limit);
+};
+
 
 server.listen(SERVER_PORT, () => {
   console.log(chalk.red.bold(`Servidor iniciado na porta: ${SERVER_PORT}`));
